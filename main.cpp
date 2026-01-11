@@ -222,6 +222,7 @@ private slots:
 
     void resetTimer() {
         timer->stop();
+        player->stop();
         isRunning = false;
         isPaused = false;
         zeroSoundPlayed = false;
@@ -284,3 +285,4 @@ int main(int argc, char *argv[]) {
 }
 
 #include "main.moc"
+
