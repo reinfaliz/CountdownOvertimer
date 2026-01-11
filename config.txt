@@ -3,7 +3,7 @@
 # ===========================
 
 # --- Start Time ---
-40     # Start Minutes
+40    # Start Minutes
 0     # Start Seconds
 
 # --- Stop Time ---
