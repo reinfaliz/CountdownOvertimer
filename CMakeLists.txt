@@ -10,9 +10,10 @@ set(CMAKE_AUTOUIC ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia)
 
 # Add the executable
-add_executable(CountdownOvertimer main.cpp)
+add_executable(CountdownOvertimer WIN32 main.cpp)
+
+# This ensures the /SUBSYSTEM:WINDOWS flag is passed to the linker
+set_target_properties(CountdownOvertimer PROPERTIES WIN32_EXECUTABLE ON)
 
 # Link Qt libraries
-
 target_link_libraries(CountdownOvertimer PRIVATE Qt6::Widgets Qt6::Multimedia)
-
