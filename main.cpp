@@ -19,7 +19,7 @@ class TimerApp : public QWidget {
 
 public:
     TimerApp(QWidget *parent = nullptr) : QWidget(parent) {
-        setWindowTitle("Negative Countdown Timer");
+        setWindowTitle("Countdown Overtimer");
         resize(400, 300);
 
         loadConfig();
@@ -221,5 +221,6 @@ int main(int argc, char *argv[]) {
     window.show();
     return app.exec();
 }
+
 
 #include "main.moc"
