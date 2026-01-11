@@ -1,0 +1,51 @@
+name: Build Qt Application
+
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    # 1. Download your code
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # 2. Install Qt 6
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: '6.5.0'
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_mingw'
+
+    # 3. Build the project using CMake
+    - name: Build
+      run: |
+        mkdir build
+        cd build
+        cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+        cmake --build . --config Release
+
+    # 4. Bundle required Qt DLLs so the app runs on your PC
+    # This runs 'windeployqt' which finds all the Qt files the .exe needs and copies them next to it.
+    - name: Deploy (Bundle DLLs)
+      shell: cmd
+      run: |
+        cd build
+        windeployqt --release CountdownOvertimer.exe --no-translations --no-opengl-sw
+
+    # 5. Copy config and sound files to the build folder so they are in the zip
+    - name: Copy Assets
+      run: |
+        copy config.txt build/
+        if exist sound_zero.mp3 copy sound_zero.mp3 build/
+        if exist sound_limit.mp3 copy sound_limit.mp3 build/
+
+    # 6. Upload the result as a ZIP file
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: NegativeTimer-App
+        path: build/
