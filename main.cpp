@@ -12,7 +12,8 @@
 #include <QUrl>
 #include <QMessageBox>
 #include <QFileInfo>
-#include <QDir>
+#include <QDateTime> 
+#include <cmath>
 
 class TimerApp : public QWidget {
     Q_OBJECT
@@ -24,7 +25,7 @@ public:
 
         loadConfig();
         setupUI();
-        resetTimer(); // Initialize logic
+        resetTimer(); 
     }
 
 private:
@@ -36,11 +37,13 @@ private:
     QString soundZeroFile;
     QString soundLimitFile;
 
-    // --- State Variables ---
-    int currentTotalSeconds;
-    int limitTotalSeconds;
+    // --- State Variables (Now using Milliseconds for precision) ---
+    qint64 currentMs;       // Current remaining time in ms
+    qint64 limitMs;         // Limit time in ms (negative)
+    qint64 targetEndTime;   // The system clock time when the timer should finish
     bool isRunning = false;
     bool isPaused = false;
+    bool zeroSoundPlayed = false; // Flag to ensure zero sound plays only once
 
     // --- GUI Components ---
     QLabel *lblDisplay;
@@ -55,39 +58,25 @@ private:
     void loadConfig() {
         QFile file("config.txt");
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QMessageBox::warning(this, "Config Error", "Could not open config.txt. Using defaults.");
-            return;
+            // If config fails, use defaults silently or warn
+            return; 
         }
 
         QTextStream in(&file);
         
-        // --- Helper Lambda to read and clean lines ---
         auto readValidLine = [&]() -> QString {
             while (!in.atEnd()) {
                 QString line = in.readLine();
-                
-                // 1. Remove comments (split at '#' and take the first part)
-                QStringList parts = line.split('#');
-                QString cleanLine = parts[0];
-
-                // 2. Trim whitespace
-                cleanLine = cleanLine.trimmed();
-
-                // 3. If line is not empty, return it. If empty, loop again.
-                if (!cleanLine.isEmpty()) {
-                    return cleanLine;
-                }
+                QString cleanLine = line.split('#')[0].trimmed();
+                if (!cleanLine.isEmpty()) return cleanLine;
             }
-            return QString(); // Return empty if end of file
+            return QString();
         };
 
-        // --- Read values in specific order ---
-        // We use toInt() which returns 0 on failure, which is a safe fallback
         startMin = readValidLine().toInt();
         startSec = readValidLine().toInt();
         limitMin = readValidLine().toInt();
         limitSec = readValidLine().toInt();
-        
         soundZeroFile = readValidLine();
         soundLimitFile = readValidLine();
         
@@ -121,9 +110,9 @@ private:
 
         mainLayout->addLayout(btnLayout);
 
-        // 3. Setup Timer
+        // 3. Setup Update Timer (Runs frequently for responsiveness)
         timer = new QTimer(this);
-        timer->setInterval(1000); // 1 second
+        timer->setInterval(50); // Update UI every 50ms
         connect(timer, &QTimer::timeout, this, &TimerApp::onTick);
 
         // 4. Setup Audio
@@ -134,11 +123,22 @@ private:
     }
 
     void updateDisplay() {
-        int absSeconds = std::abs(currentTotalSeconds);
-        int m = absSeconds / 60;
-        int s = absSeconds % 60;
+        // Convert ms to seconds for display
+        // We use absolute value because formatting handles the sign
+        qint64 absMs = std::abs(currentMs);
+        qint64 totalSeconds = absMs / 1000; 
 
-        QString sign = (currentTotalSeconds < 0) ? "-" : "";
+        int m = totalSeconds / 60;
+        int s = totalSeconds % 60;
+
+        QString sign = (currentMs < 0) ? "-" : "";
+        
+        // Handle the special case where it is negative zero (e.g. -0.5s)
+        // If currentMs is between -999 and 0, we force a negative sign
+        if (currentMs < 0 && currentMs > -1000) {
+            sign = "-";
+        }
+
         QString timeStr = QString("%1%2:%3")
                             .arg(sign)
                             .arg(m, 2, 10, QChar('0'))
@@ -146,7 +146,7 @@ private:
 
         lblDisplay->setText(timeStr);
 
-        if (currentTotalSeconds < 0) {
+        if (currentMs < 0) {
             lblDisplay->setStyleSheet("color: red;");
         } else {
             lblDisplay->setStyleSheet("color: black;");
@@ -158,6 +158,7 @@ private:
 
         QFileInfo checkFile(fileName);
         if (checkFile.exists() && checkFile.isFile()) {
+            player->stop(); // Stop any currently playing sound
             player->setSource(QUrl::fromLocalFile(checkFile.absoluteFilePath()));
             player->play();
         } else {
@@ -174,9 +175,13 @@ private slots:
         timer->stop();
         isRunning = false;
         isPaused = false;
+        zeroSoundPlayed = false;
 
-        currentTotalSeconds = (startMin * 60) + startSec;
-        limitTotalSeconds = -1 * ((limitMin * 60) + limitSec);
+        // Calculate initial ms
+        currentMs = ((startMin * 60) + startSec) * 1000;
+        
+        // Calculate limit ms (negative)
+        limitMs = -1 * ((limitMin * 60) + limitSec) * 1000;
 
         btnStartPause->setText("Start");
         btnStartPause->setVisible(true);
@@ -185,28 +190,53 @@ private slots:
 
     void onStartPauseClicked() {
         if (!isRunning) {
+            // --- STARTING ---
             isRunning = true;
             isPaused = false;
             btnStartPause->setText("Pause");
+            
+            // Calculate the target end time based on current system clock
+            // Target = Now + TimeRemaining
+            targetEndTime = QDateTime::currentMSecsSinceEpoch() + currentMs;
+            
             timer->start();
         } else {
+            // --- PAUSING ---
             isRunning = false;
             isPaused = true;
             btnStartPause->setText("Start");
             timer->stop();
+            
+            // Note: We don't need to do anything else.
+            // 'currentMs' holds the exact milliseconds remaining 
+            // because it was updated in the last onTick().
         }
     }
 
     void onTick() {
-        currentTotalSeconds--;
+        // Calculate remaining time based on system clock
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        currentMs = targetEndTime - now;
+        
         updateDisplay();
 
-        if (currentTotalSeconds == 0) {
+        // 1. Check for 00:00
+        // We check if we just crossed zero or are very close to it
+        // Using a flag ensures we only play it once
+        if (currentMs <= 0 && !zeroSoundPlayed) {
             playSound(soundZeroFile);
+            zeroSoundPlayed = true;
         }
 
-        if (currentTotalSeconds == limitTotalSeconds) {
+        // 2. Check for Limit
+        if (currentMs <= limitMs) {
+            // Clamp to limit so display shows exact limit
+            currentMs = limitMs; 
+            updateDisplay();
+            
             playSound(soundLimitFile);
+            
+            // Stop everything
             timer->stop();
             isRunning = false;
             isPaused = true;
@@ -221,6 +251,5 @@ int main(int argc, char *argv[]) {
     window.show();
     return app.exec();
 }
-
 
 #include "main.moc"
