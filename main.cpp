@@ -13,6 +13,8 @@
 #include <QMessageBox>
 #include <QFileInfo>
 #include <QDateTime> 
+#include <QKeyEvent>    // Added for Keyboard Input
+#include <QResizeEvent> // Added for Window Resizing
 #include <cmath>
 
 class TimerApp : public QWidget {
@@ -20,12 +22,61 @@ class TimerApp : public QWidget {
 
 public:
     TimerApp(QWidget *parent = nullptr) : QWidget(parent) {
-        setWindowTitle("Countdown Overtimer");
-        resize(400, 300);
+        setWindowTitle("Negative Countdown Timer");
+        resize(600, 400); // Slightly larger default start size
 
         loadConfig();
         setupUI();
         resetTimer(); 
+    }
+
+protected:
+    // (1) Handle Window Resizing (Scaling the Text)
+    void resizeEvent(QResizeEvent *event) override {
+        QWidget::resizeEvent(event);
+        
+        // Calculate new font size dynamically
+        // We want the text to fit within the window, regardless of aspect ratio.
+        // "00:00" is 5 chars, "-15:00" is 6 chars. 
+        
+        int h = height();
+        int w = width();
+
+        // Heuristic: 
+        // 1. Height-based: Text should take up about 50% of screen height
+        // 2. Width-based: Width / 5 (roughly chars count)
+        int sizeByHeight = h * 0.50; 
+        int sizeByWidth = w / 4.5;   
+
+        // Pick the smaller one to ensure it fits inside the window
+        int newPointSize = std::min(sizeByHeight, sizeByWidth);
+
+        // Set a minimum safety size so it doesn't disappear
+        if (newPointSize < 20) newPointSize = 20;
+
+        QFont font = lblDisplay->font();
+        font.setPointSize(newPointSize);
+        lblDisplay->setFont(font);
+    }
+
+    // (2) Handle Alt + Enter for Fullscreen
+    void keyPressEvent(QKeyEvent *event) override {
+        // Check for Alt + Enter (Key_Return is the main Enter, Key_Enter is Numpad Enter)
+        if ((event->modifiers() & Qt::AltModifier) && 
+            (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+            
+            if (isFullScreen()) {
+                showNormal();
+            } else {
+                showFullScreen();
+            }
+            // Note: The resizeEvent() is called automatically by Qt 
+            // when the window state changes, so the text will scale automatically.
+            
+        } else {
+            // Pass other keys to the parent class
+            QWidget::keyPressEvent(event);
+        }
     }
 
 private:
@@ -37,13 +88,13 @@ private:
     QString soundZeroFile;
     QString soundLimitFile;
 
-    // --- State Variables (Now using Milliseconds for precision) ---
-    qint64 currentMs;       // Current remaining time in ms
-    qint64 limitMs;         // Limit time in ms (negative)
-    qint64 targetEndTime;   // The system clock time when the timer should finish
+    // --- State Variables ---
+    qint64 currentMs;       
+    qint64 limitMs;         
+    qint64 targetEndTime;   
     bool isRunning = false;
     bool isPaused = false;
-    bool zeroSoundPlayed = false; // Flag to ensure zero sound plays only once
+    bool zeroSoundPlayed = false; 
 
     // --- GUI Components ---
     QLabel *lblDisplay;
@@ -58,7 +109,6 @@ private:
     void loadConfig() {
         QFile file("config.txt");
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            // If config fails, use defaults silently or warn
             return; 
         }
 
@@ -90,9 +140,12 @@ private:
         lblDisplay = new QLabel("00:00", this);
         lblDisplay->setAlignment(Qt::AlignCenter);
         QFont font = lblDisplay->font();
-        font.setPointSize(60);
         font.setBold(true);
         lblDisplay->setFont(font);
+        
+        // Allow the label to expand to fill available space
+        lblDisplay->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        
         mainLayout->addWidget(lblDisplay);
 
         // 2. Button Layout
@@ -110,12 +163,12 @@ private:
 
         mainLayout->addLayout(btnLayout);
 
-        // 3. Setup Update Timer (Runs frequently for responsiveness)
+        // 3. Timer Setup
         timer = new QTimer(this);
-        timer->setInterval(50); // Update UI every 50ms
+        timer->setInterval(50); 
         connect(timer, &QTimer::timeout, this, &TimerApp::onTick);
 
-        // 4. Setup Audio
+        // 4. Audio Setup
         player = new QMediaPlayer(this);
         audioOutput = new QAudioOutput(this);
         player->setAudioOutput(audioOutput);
@@ -123,8 +176,6 @@ private:
     }
 
     void updateDisplay() {
-        // Convert ms to seconds for display
-        // We use absolute value because formatting handles the sign
         qint64 absMs = std::abs(currentMs);
         qint64 totalSeconds = absMs / 1000; 
 
@@ -133,8 +184,6 @@ private:
 
         QString sign = (currentMs < 0) ? "-" : "";
         
-        // Handle the special case where it is negative zero (e.g. -0.5s)
-        // If currentMs is between -999 and 0, we force a negative sign
         if (currentMs < 0 && currentMs > -1000) {
             sign = "-";
         }
@@ -158,7 +207,7 @@ private:
 
         QFileInfo checkFile(fileName);
         if (checkFile.exists() && checkFile.isFile()) {
-            player->stop(); // Stop any currently playing sound
+            player->stop(); 
             player->setSource(QUrl::fromLocalFile(checkFile.absoluteFilePath()));
             player->play();
         } else {
@@ -177,66 +226,48 @@ private slots:
         isPaused = false;
         zeroSoundPlayed = false;
 
-        // Calculate initial ms
         currentMs = ((startMin * 60) + startSec) * 1000;
-        
-        // Calculate limit ms (negative)
         limitMs = -1 * ((limitMin * 60) + limitSec) * 1000;
 
         btnStartPause->setText("Start");
         btnStartPause->setVisible(true);
         updateDisplay();
+        
+        // Force a resize event to ensure font is correct size on startup/reset
+        QResizeEvent *event = new QResizeEvent(this->size(), this->size());
+        QCoreApplication::postEvent(this, event);
     }
 
     void onStartPauseClicked() {
         if (!isRunning) {
-            // --- STARTING ---
             isRunning = true;
             isPaused = false;
             btnStartPause->setText("Pause");
-            
-            // Calculate the target end time based on current system clock
-            // Target = Now + TimeRemaining
             targetEndTime = QDateTime::currentMSecsSinceEpoch() + currentMs;
-            
             timer->start();
         } else {
-            // --- PAUSING ---
             isRunning = false;
             isPaused = true;
             btnStartPause->setText("Start");
             timer->stop();
-            
-            // Note: We don't need to do anything else.
-            // 'currentMs' holds the exact milliseconds remaining 
-            // because it was updated in the last onTick().
         }
     }
 
     void onTick() {
-        // Calculate remaining time based on system clock
         qint64 now = QDateTime::currentMSecsSinceEpoch();
         currentMs = targetEndTime - now;
         
         updateDisplay();
 
-        // 1. Check for 00:00
-        // We check if we just crossed zero or are very close to it
-        // Using a flag ensures we only play it once
         if (currentMs <= 0 && !zeroSoundPlayed) {
             playSound(soundZeroFile);
             zeroSoundPlayed = true;
         }
 
-        // 2. Check for Limit
         if (currentMs <= limitMs) {
-            // Clamp to limit so display shows exact limit
             currentMs = limitMs; 
             updateDisplay();
-            
             playSound(soundLimitFile);
-            
-            // Stop everything
             timer->stop();
             isRunning = false;
             isPaused = true;
